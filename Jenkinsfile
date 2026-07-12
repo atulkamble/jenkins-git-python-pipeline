@@ -124,23 +124,50 @@ pipeline {
                 '''
             }
         }
+
+        stage('Keep Running') {
+            steps {
+                echo 'Keeping Flask application running after pipeline completes...'
+
+                sh '''
+                    APP_PID=$(cat flask-app.pid 2>/dev/null || echo "")
+
+                    if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
+                    then
+                        # Disown the process so it survives beyond this build
+                        disown "$APP_PID" 2>/dev/null || true
+
+                        echo "----------------------------------------------------"
+                        echo "Flask app is RUNNING with PID: $APP_PID"
+                        echo "Access URL : http://127.0.0.1:$APP_PORT"
+                        echo "Health URL : http://127.0.0.1:$APP_PORT/health"
+                        echo "Log file   : $(pwd)/flask-app.log"
+                        echo "Stop app   : kill $APP_PID"
+                        echo "----------------------------------------------------"
+                    else
+                        echo "ERROR: Flask application is not running. Check flask-app.log."
+                        cat flask-app.log || true
+                        exit 1
+                    fi
+                '''
+            }
+        }
     }
 
     post {
         always {
-            echo 'Stopping the Flask application...'
+            echo 'Pipeline post-actions: archiving logs...'
 
             sh '''
                 if [ -f flask-app.pid ]
                 then
                     APP_PID=$(cat flask-app.pid)
-
                     if kill -0 "$APP_PID" 2>/dev/null
                     then
-                        kill "$APP_PID" || true
-                        echo "Flask application stopped."
+                        echo "Flask app is still running with PID $APP_PID (keep-running mode)."
+                    else
+                        echo "Flask app is not running."
                     fi
-
                     rm -f flask-app.pid
                 fi
             '''
