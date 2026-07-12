@@ -1,17 +1,29 @@
 import os
-from flask import Flask
+import platform
+import sys
+from datetime import datetime
+from flask import Flask, render_template, jsonify
 
 app = Flask(__name__)
+
+START_TIME = datetime.utcnow()
 
 
 @app.route("/")
 def index():
-    return "Hello from Jenkins pipeline project!"
+    return render_template("index.html")
 
 
 @app.route("/health")
 def health():
-    return {"status": "ok"}
+    uptime = str(datetime.utcnow() - START_TIME).split(".")[0]
+    return jsonify({
+        "status": "ok",
+        "uptime": uptime,
+        "python": sys.version.split()[0],
+        "platform": platform.system(),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    })
 
 
 if __name__ == "__main__":

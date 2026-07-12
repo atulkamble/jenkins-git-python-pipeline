@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Flask Pipeline App{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">
+      <span class="brand-icon">⚙</span>
+      <span class="brand-text">Jenkins Pipeline</span>
+    </div>
+    <div class="navbar-links">
+      <a href="/" class="nav-link">Home</a>
+      <a href="/health" class="nav-link" target="_blank">Health</a>
+      <a href="https://github.com/atulkamble/jenkins-git-python-pipeline"
+         class="nav-link nav-link-github" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <p>Built with Flask &amp; Gunicorn &nbsp;·&nbsp; CI/CD by Jenkins</p>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

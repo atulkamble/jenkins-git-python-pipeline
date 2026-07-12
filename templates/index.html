@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Flask Pipeline App — Home{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero-badge">🚀 Live on Production</div>
+  <h1 class="hero-title">Jenkins Git Python Pipeline</h1>
+  <p class="hero-subtitle">
+    A fully automated CI/CD pipeline running a production-grade
+    Flask application served by Gunicorn.
+  </p>
+  <div class="hero-actions">
+    <a href="/health" class="btn btn-primary" id="healthBtn">Check Health</a>
+    <a href="https://github.com/atulkamble/jenkins-git-python-pipeline"
+       class="btn btn-outline" target="_blank" rel="noopener">View Source</a>
+  </div>
+</section>
+
+<section class="cards">
+  <div class="card">
+    <div class="card-icon">🐍</div>
+    <h3 class="card-title">Python & Flask</h3>
+    <p class="card-desc">Built with Flask 3.x and served via Gunicorn with auto-scaled workers.</p>
+  </div>
+  <div class="card">
+    <div class="card-icon">🔁</div>
+    <h3 class="card-title">Jenkins CI/CD</h3>
+    <p class="card-desc">Declarative pipeline: checkout → test → validate → deploy → health check.</p>
+  </div>
+  <div class="card">
+    <div class="card-icon">🌐</div>
+    <h3 class="card-title">Public Access</h3>
+    <p class="card-desc">Exposed on port 5000 with internet-facing Gunicorn workers.</p>
+  </div>
+  <div class="card">
+    <div class="card-icon">❤</div>
+    <h3 class="card-title">Health Check</h3>
+    <p class="card-desc">Live <code>/health</code> endpoint returns uptime, Python version and status.</p>
+  </div>
+</section>
+
+<section class="health-panel" id="healthPanel">
+  <h2 class="panel-title">Live Health Status</h2>
+  <div class="health-grid" id="healthGrid">
+    <div class="health-item">
+      <span class="health-label">Status</span>
+      <span class="health-value" id="hStatus">—</span>
+    </div>
+    <div class="health-item">
+      <span class="health-label">Uptime</span>
+      <span class="health-value" id="hUptime">—</span>
+    </div>
+    <div class="health-item">
+      <span class="health-label">Python</span>
+      <span class="health-value" id="hPython">—</span>
+    </div>
+    <div class="health-item">
+      <span class="health-label">Platform</span>
+      <span class="health-value" id="hPlatform">—</span>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadHealth() {
+    try {
+      const res = await fetch('/health');
+      const data = await res.json();
+      document.getElementById('hStatus').textContent   = data.status;
+      document.getElementById('hStatus').className     = 'health-value status-' + data.status;
+      document.getElementById('hUptime').textContent   = data.uptime;
+      document.getElementById('hPython').textContent   = data.python;
+      document.getElementById('hPlatform').textContent = data.platform;
+    } catch {
+      document.getElementById('hStatus').textContent = 'unreachable';
+    }
+  }
+  loadHealth();
+  setInterval(loadHealth, 15000);
+</script>
+{% endblock %}
