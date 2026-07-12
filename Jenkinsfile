@@ -2,9 +2,17 @@ pipeline {
     agent any
 
     environment {
-        APP_NAME = 'flask-app'
-        VENV_DIR = 'venv'
-        APP_PORT = '5000'
+        APP_NAME        = 'flask-app'
+        VENV_DIR        = 'venv'
+        APP_PORT        = '5000'
+
+        // Docker
+        DOCKER_IMAGE    = 'atulkamble/flask-pipeline-app'
+        DOCKER_TAG      = "build-${BUILD_NUMBER}"
+        DOCKER_LATEST   = 'latest'
+        DOCKER_REGISTRY = 'https://index.docker.io/v1/'
+        DOCKER_CREDS_ID = 'docker-creds'   // Jenkins credential ID
+        CONTAINER_NAME  = 'flask-pipeline-app'
     }
 
     options {
@@ -82,9 +90,136 @@ pipeline {
             }
         }
 
-        stage('Run Application') {
+        stage('Docker Build') {
             steps {
-                echo 'Starting Flask application with Gunicorn (production)...'
+                echo 'Building Docker image...'
+
+                sh '''
+                    docker build \
+                        --tag "$DOCKER_IMAGE:$DOCKER_TAG" \
+                        --tag "$DOCKER_IMAGE:$DOCKER_LATEST" \
+                        --label "build.number=$BUILD_NUMBER" \
+                        --label "build.url=$BUILD_URL" \
+                        --file Dockerfile \
+                        .
+
+                    echo "========================================================"
+                    echo "  Docker image built successfully"
+                    echo "  Image : $DOCKER_IMAGE:$DOCKER_TAG"
+                    echo "  Also  : $DOCKER_IMAGE:$DOCKER_LATEST"
+                    echo "========================================================"
+                    docker images "$DOCKER_IMAGE"
+                '''
+            }
+        }
+
+        stage('Docker Test') {
+            steps {
+                echo 'Running container smoke test...'
+
+                sh '''
+                    # Stop any leftover test container
+                    docker rm -f flask-test 2>/dev/null || true
+
+                    # Start test container on a different port to avoid conflict
+                    docker run -d \
+                        --name flask-test \
+                        --publish 5001:5000 \
+                        "$DOCKER_IMAGE:$DOCKER_TAG"
+
+                    echo "Test container started. Waiting for app to be ready..."
+                    sleep 5
+
+                    TEST_PASSED=false
+                    for attempt in 1 2 3 4 5
+                    do
+                        if curl --fail --silent "http://127.0.0.1:5001/" > /dev/null
+                        then
+                            echo "Container smoke test passed on attempt $attempt."
+                            TEST_PASSED=true
+                            break
+                        fi
+                        echo "Attempt $attempt failed, retrying..."
+                        sleep 3
+                    done
+
+                    # Print container logs before removing
+                    docker logs flask-test || true
+
+                    # Remove test container
+                    docker rm -f flask-test || true
+
+                    if [ "$TEST_PASSED" != "true" ]
+                    then
+                        echo "ERROR: Docker container smoke test failed."
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                echo 'Pushing Docker image to Docker Hub...'
+
+                withCredentials([usernamePassword(
+                    credentialsId: "${DOCKER_CREDS_ID}",
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login "$DOCKER_REGISTRY" \
+                            --username "$DOCKER_USER" --password-stdin
+
+                        docker push "$DOCKER_IMAGE:$DOCKER_TAG"
+                        docker push "$DOCKER_IMAGE:$DOCKER_LATEST"
+
+                        echo "========================================================"
+                        echo "  Pushed: $DOCKER_IMAGE:$DOCKER_TAG"
+                        echo "  Pushed: $DOCKER_IMAGE:$DOCKER_LATEST"
+                        echo "  Hub URL: https://hub.docker.com/r/$DOCKER_IMAGE"
+                        echo "========================================================"
+
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Run') {
+            steps {
+                echo 'Starting production container...'
+
+                sh '''
+                    # Stop and remove any previous production container
+                    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+                    docker rm   "$CONTAINER_NAME" 2>/dev/null || true
+
+                    # Run the production container
+                    docker run -d \
+                        --name "$CONTAINER_NAME" \
+                        --publish "$APP_PORT":5000 \
+                        --restart unless-stopped \
+                        --log-driver json-file \
+                        --log-opt max-size=10m \
+                        --log-opt max-file=3 \
+                        "$DOCKER_IMAGE:$DOCKER_TAG"
+
+                    echo "Container $CONTAINER_NAME started."
+                    docker ps --filter "name=$CONTAINER_NAME" --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+                '''
+            }
+        }
+
+        stage('Run Application') {
+            when {
+                expression {
+                    // Fallback: only run Gunicorn directly if Docker is not available
+                    sh(script: 'command -v docker', returnStatus: true) != 0
+                }
+            }
+            steps {
+                echo 'Docker not available — starting Flask application with Gunicorn (fallback)...'
 
                 sh '''
                     WORKERS=$(( 2 * $(nproc) + 1 ))
@@ -238,31 +373,50 @@ pipeline {
 
         stage('Keep Running') {
             steps {
-                echo 'Keeping Flask application running after pipeline completes...'
+                echo 'Keeping container running after pipeline completes...'
 
                 sh '''
-                    APP_PID=$(cat flask-app.pid 2>/dev/null || echo "")
                     PUBLIC_IP=$(cat public-ip.txt 2>/dev/null || echo "UNKNOWN")
 
-                    if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
+                    if docker inspect "$CONTAINER_NAME" > /dev/null 2>&1
                     then
-                        # Disown the process so it survives beyond this build
-                        disown "$APP_PID" 2>/dev/null || true
+                        CONTAINER_STATUS=$(docker inspect \
+                            --format "{{.State.Status}}" "$CONTAINER_NAME")
 
                         echo "========================================================"
-                        echo "  Flask app is RUNNING and publicly accessible"
+                        echo "  Docker container is $CONTAINER_STATUS"
                         echo "========================================================"
-                        echo "  PID          : $APP_PID"
-                        echo "  Local URL    : http://127.0.0.1:$APP_PORT"
-                        echo "  Public URL   : http://$PUBLIC_IP:$APP_PORT"
-                        echo "  Health URL   : http://$PUBLIC_IP:$APP_PORT/health"
-                        echo "  Log file     : $(pwd)/flask-app.log"
-                        echo "  Stop app     : kill $APP_PID"
+                        echo "  Container  : $CONTAINER_NAME"
+                        echo "  Image      : $DOCKER_IMAGE:$DOCKER_TAG"
+                        echo "  Local URL  : http://127.0.0.1:$APP_PORT"
+                        echo "  Public URL : http://$PUBLIC_IP:$APP_PORT"
+                        echo "  Health URL : http://$PUBLIC_IP:$APP_PORT/health"
+                        echo "  Docker Hub : https://hub.docker.com/r/$DOCKER_IMAGE"
+                        echo "--------------------------------------------------------"
+                        echo "  Manage:"
+                        echo "    Logs  : docker logs -f $CONTAINER_NAME"
+                        echo "    Stop  : docker stop $CONTAINER_NAME"
+                        echo "    Stats : docker stats $CONTAINER_NAME"
                         echo "========================================================"
+
+                        if [ "$CONTAINER_STATUS" != "running" ]
+                        then
+                            echo "ERROR: Container is not in running state."
+                            docker logs "$CONTAINER_NAME" || true
+                            exit 1
+                        fi
                     else
-                        echo "ERROR: Flask application is not running. Check flask-app.log."
-                        cat flask-app.log || true
-                        exit 1
+                        # Fallback: check Gunicorn PID
+                        APP_PID=$(cat flask-app.pid 2>/dev/null || echo "")
+                        if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
+                        then
+                            disown "$APP_PID" 2>/dev/null || true
+                            echo "Gunicorn fallback running with PID $APP_PID"
+                            echo "Public URL : http://$PUBLIC_IP:$APP_PORT"
+                        else
+                            echo "ERROR: Neither Docker container nor Gunicorn is running."
+                            exit 1
+                        fi
                     fi
                 '''
             }
@@ -271,17 +425,23 @@ pipeline {
 
     post {
         always {
-            echo 'Pipeline post-actions: archiving logs...'
+            echo 'Pipeline post-actions: collecting logs and artifacts...'
 
             sh '''
+                # Collect Docker container logs
+                if docker inspect "$CONTAINER_NAME" > /dev/null 2>&1
+                then
+                    docker logs "$CONTAINER_NAME" > flask-app.log 2>&1 || true
+                    echo "Docker container $CONTAINER_NAME is still running (keep-running mode)."
+                fi
+
+                # Gunicorn PID cleanup (fallback mode)
                 if [ -f flask-app.pid ]
                 then
                     APP_PID=$(cat flask-app.pid)
                     if kill -0 "$APP_PID" 2>/dev/null
                     then
-                        echo "Flask app is still running with PID $APP_PID (keep-running mode)."
-                    else
-                        echo "Flask app is not running."
+                        echo "Gunicorn is still running with PID $APP_PID."
                     fi
                     rm -f flask-app.pid
                 fi
@@ -293,10 +453,22 @@ pipeline {
 
         success {
             echo "${APP_NAME} pipeline completed successfully."
+            sh '''
+                echo "Docker image : $DOCKER_IMAGE:$DOCKER_TAG"
+                echo "Container    : $CONTAINER_NAME"
+                docker ps --filter "name=$CONTAINER_NAME" \
+                    --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" || true
+            '''
         }
 
         failure {
-            echo "${APP_NAME} pipeline failed. Check the Jenkins console output and flask-app.log."
+            echo "${APP_NAME} pipeline failed."
+            sh '''
+                echo "--- Docker container logs (if any) ---"
+                docker logs "$CONTAINER_NAME" --tail 50 2>/dev/null || true
+                echo "--- Gunicorn boot log (if any) ---"
+                cat gunicorn-boot.log 2>/dev/null || true
+            '''
         }
 
         cleanup {
