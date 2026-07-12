@@ -1,23 +1,47 @@
 pipeline {
     agent any
 
+    environment {
+        // Define environment variables here
+        APP_NAME = 'flask-app'
+        VENV_DIR = 'venv'
+        MY_VAR = 'some_value'
+    }
+
+    options {
+         timestamps() // Add timestamps to the console output
+         disableConcurrentBuilds() // Prevent concurrent builds of the same job
+    }
+
     stages {
-        stage('Build') {
+        stage('Checkout') {
             steps {
-                echo 'Building...'
-                // Add build steps here
+                checkout scm 
+                // Add checkout steps here
+                git branch: 'main', url: 'https://github.com/atulkamble/jenkins-git-python-pipeline.git'
             }
         }
-        stage('Test') {
+        stage('Check Python Version') {
             steps {
-                echo 'Testing...'
-                // Add test steps here
+                echo 'Checking Python version...'
+                python --version 
+                pip --version   
             }
         }
-        stage('Deploy') {
+        stage('Create Virtual Environment') {
             steps {
-                echo 'Deploying...'
-                // Add deploy steps here
+                echo 'Creating virtual environment...'
+                python -m venv $VENV_DIR    
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                echo 'Installing dependencies...'
+                sh '''
+                    source $VENV_DIR/bin/activate
+                    pip install -r requirements.txt
+                '''
             }
         }
     }
