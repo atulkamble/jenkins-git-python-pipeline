@@ -7,7 +7,7 @@ pipeline {
         APP_PORT        = '5000'
 
         // Docker
-        DOCKER_IMAGE    = 'atulkamble/flask-pipeline-app'
+        DOCKER_IMAGE    = 'atuljkamble/flask-pipeline-app'
         DOCKER_TAG      = "build-${BUILD_NUMBER}"
         DOCKER_LATEST   = 'latest'
         DOCKER_REGISTRY = 'https://index.docker.io/v1/'
