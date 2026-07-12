@@ -125,25 +125,64 @@ pipeline {
             }
         }
 
+        stage('Expose to Internet') {
+            steps {
+                echo 'Opening firewall port and fetching public IP...'
+
+                sh '''
+                    # Open port in UFW firewall (Ubuntu/Debian)
+                    if command -v ufw > /dev/null 2>&1; then
+                        ufw allow "$APP_PORT"/tcp || true
+                        echo "UFW: port $APP_PORT opened."
+                    else
+                        echo "UFW not found — skipping firewall rule (open port $APP_PORT manually if needed)."
+                    fi
+
+                    # Open port in firewalld (RHEL/CentOS)
+                    if command -v firewall-cmd > /dev/null 2>&1; then
+                        firewall-cmd --permanent --add-port="$APP_PORT"/tcp || true
+                        firewall-cmd --reload || true
+                        echo "firewalld: port $APP_PORT opened."
+                    fi
+
+                    # Resolve public IP
+                    PUBLIC_IP=$(curl --silent --max-time 5 https://api.ipify.org \
+                        || curl --silent --max-time 5 https://ifconfig.me \
+                        || curl --silent --max-time 5 https://icanhazip.com \
+                        || echo "UNKNOWN")
+
+                    echo "$PUBLIC_IP" > public-ip.txt
+                    echo "Public IP resolved: $PUBLIC_IP"
+                '''
+            }
+        }
+
         stage('Keep Running') {
             steps {
                 echo 'Keeping Flask application running after pipeline completes...'
 
                 sh '''
                     APP_PID=$(cat flask-app.pid 2>/dev/null || echo "")
+                    PUBLIC_IP=$(cat public-ip.txt 2>/dev/null || echo "UNKNOWN")
 
                     if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
                     then
                         # Disown the process so it survives beyond this build
                         disown "$APP_PID" 2>/dev/null || true
 
-                        echo "----------------------------------------------------"
-                        echo "Flask app is RUNNING with PID: $APP_PID"
-                        echo "Access URL : http://127.0.0.1:$APP_PORT"
-                        echo "Health URL : http://127.0.0.1:$APP_PORT/health"
-                        echo "Log file   : $(pwd)/flask-app.log"
-                        echo "Stop app   : kill $APP_PID"
-                        echo "----------------------------------------------------"
+                        echo "========================================================"
+                        echo "  Flask app is RUNNING and publicly accessible"
+                        echo "========================================================"
+                        echo "  PID          : $APP_PID"
+                        echo "  Local URL    : http://127.0.0.1:$APP_PORT"
+                        echo "  Public URL   : http://$PUBLIC_IP:$APP_PORT"
+                        echo "  Health URL   : http://$PUBLIC_IP:$APP_PORT/health"
+                        echo "  Log file     : $(pwd)/flask-app.log"
+                        echo "  Stop app     : kill $APP_PID"
+                        echo "--------------------------------------------------------"
+                        echo "  NOTE: Ensure your cloud security group / NSG allows"
+                        echo "  inbound TCP traffic on port $APP_PORT from 0.0.0.0/0"
+                        echo "========================================================"
                     else
                         echo "ERROR: Flask application is not running. Check flask-app.log."
                         cat flask-app.log || true
@@ -172,7 +211,7 @@ pipeline {
                 fi
             '''
 
-            archiveArtifacts artifacts: 'flask-app.log',
+            archiveArtifacts artifacts: 'flask-app.log, public-ip.txt',
                              allowEmptyArchive: true
         }
 
