@@ -141,21 +141,28 @@ pipeline {
                 echo 'Opening firewall port and fetching public IP...'
 
                 sh '''
-                    # Open port in UFW firewall (Ubuntu/Debian) — requires sudo
+                    # UFW — attempt without sudo; print manual command if it fails
                     if command -v ufw > /dev/null 2>&1; then
-                        sudo ufw allow "$APP_PORT"/tcp || true
-                        sudo ufw --force enable || true
-                        echo "UFW: port $APP_PORT opened."
-                        sudo ufw status | grep "$APP_PORT" || true
+                        if ufw allow "$APP_PORT"/tcp 2>/dev/null; then
+                            ufw --force enable 2>/dev/null || true
+                            echo "UFW: port $APP_PORT opened."
+                        else
+                            echo "UFW requires sudo. Run manually on the server:"
+                            echo "  sudo ufw allow $APP_PORT/tcp && sudo ufw --force enable"
+                        fi
                     else
                         echo "UFW not found — skipping UFW rule."
                     fi
 
-                    # Open port in firewalld (RHEL/CentOS) — requires sudo
+                    # firewalld (RHEL/CentOS) — attempt without sudo
                     if command -v firewall-cmd > /dev/null 2>&1; then
-                        sudo firewall-cmd --permanent --add-port="$APP_PORT"/tcp || true
-                        sudo firewall-cmd --reload || true
-                        echo "firewalld: port $APP_PORT opened."
+                        if firewall-cmd --permanent --add-port="$APP_PORT"/tcp 2>/dev/null; then
+                            firewall-cmd --reload 2>/dev/null || true
+                            echo "firewalld: port $APP_PORT opened."
+                        else
+                            echo "firewalld requires sudo. Run manually on the server:"
+                            echo "  sudo firewall-cmd --permanent --add-port=$APP_PORT/tcp && sudo firewall-cmd --reload"
+                        fi
                     fi
 
                     # Resolve public IP
@@ -199,25 +206,28 @@ pipeline {
 
                     echo ""
                     echo "--- UFW status ---"
-                    sudo ufw status 2>/dev/null || echo "UFW not available"
+                    ufw status 2>/dev/null || echo "UFW not available or requires sudo"
 
                     echo ""
                     echo "========================================================"
-                    echo "  ACTION REQUIRED — Open inbound port $APP_PORT in your"
+                    echo "  ACTION REQUIRED - Open inbound port $APP_PORT in your"
                     echo "  cloud provider security group / firewall:"
+                    echo ""
+                    echo "  OS Firewall (run on server as root):"
+                    echo "    sudo ufw allow $APP_PORT/tcp"
                     echo ""
                     echo "  AWS EC2 (Security Group):"
                     echo "    Inbound rule: TCP $APP_PORT  Source: 0.0.0.0/0"
                     echo ""
                     echo "  Azure VM (NSG):"
-                    echo "    az network nsg rule create \\"
-                    echo "      --resource-group <RG> --nsg-name <NSG> \\"
-                    echo "      --name Allow-$APP_PORT --priority 1001 \\"
-                    echo "      --protocol Tcp --destination-port-ranges $APP_PORT \\"
+                    echo "    az network nsg rule create"
+                    echo "      --resource-group YOUR_RG --nsg-name YOUR_NSG"
+                    echo "      --name Allow-$APP_PORT --priority 1001"
+                    echo "      --protocol Tcp --destination-port-ranges $APP_PORT"
                     echo "      --access Allow --direction Inbound"
                     echo ""
                     echo "  GCP (Firewall Rule):"
-                    echo "    gcloud compute firewall-rules create allow-$APP_PORT \\"
+                    echo "    gcloud compute firewall-rules create allow-$APP_PORT"
                     echo "      --allow tcp:$APP_PORT --source-ranges 0.0.0.0/0"
                     echo ""
                     echo "  Public URL: http://$PUBLIC_IP:$APP_PORT"
