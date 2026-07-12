@@ -141,18 +141,20 @@ pipeline {
                 echo 'Opening firewall port and fetching public IP...'
 
                 sh '''
-                    # Open port in UFW firewall (Ubuntu/Debian)
+                    # Open port in UFW firewall (Ubuntu/Debian) — requires sudo
                     if command -v ufw > /dev/null 2>&1; then
-                        ufw allow "$APP_PORT"/tcp || true
+                        sudo ufw allow "$APP_PORT"/tcp || true
+                        sudo ufw --force enable || true
                         echo "UFW: port $APP_PORT opened."
+                        sudo ufw status | grep "$APP_PORT" || true
                     else
-                        echo "UFW not found — skipping firewall rule (open port $APP_PORT manually if needed)."
+                        echo "UFW not found — skipping UFW rule."
                     fi
 
-                    # Open port in firewalld (RHEL/CentOS)
+                    # Open port in firewalld (RHEL/CentOS) — requires sudo
                     if command -v firewall-cmd > /dev/null 2>&1; then
-                        firewall-cmd --permanent --add-port="$APP_PORT"/tcp || true
-                        firewall-cmd --reload || true
+                        sudo firewall-cmd --permanent --add-port="$APP_PORT"/tcp || true
+                        sudo firewall-cmd --reload || true
                         echo "firewalld: port $APP_PORT opened."
                     fi
 
@@ -164,6 +166,62 @@ pipeline {
 
                     echo "$PUBLIC_IP" > public-ip.txt
                     echo "Public IP resolved: $PUBLIC_IP"
+                '''
+            }
+        }
+
+        stage('Diagnose Network') {
+            steps {
+                echo 'Verifying app is reachable on all interfaces...'
+
+                sh '''
+                    PUBLIC_IP=$(cat public-ip.txt 2>/dev/null || echo "UNKNOWN")
+
+                    echo "========================================================"
+                    echo "  NETWORK DIAGNOSTICS"
+                    echo "========================================================"
+
+                    echo ""
+                    echo "--- Listening sockets on port $APP_PORT ---"
+                    ss -tlnp "sport = :$APP_PORT" 2>/dev/null \
+                        || netstat -tlnp 2>/dev/null | grep ":$APP_PORT" \
+                        || echo "ss/netstat not available"
+
+                    echo ""
+                    echo "--- Local connectivity test ---"
+                    curl --silent --max-time 5 --write-out "HTTP %{http_code}" \
+                        "http://127.0.0.1:$APP_PORT/" || echo "FAILED"
+
+                    echo ""
+                    echo "--- Health endpoint test ---"
+                    curl --silent --max-time 5 --write-out "HTTP %{http_code}" \
+                        "http://127.0.0.1:$APP_PORT/health" || echo "FAILED"
+
+                    echo ""
+                    echo "--- UFW status ---"
+                    sudo ufw status 2>/dev/null || echo "UFW not available"
+
+                    echo ""
+                    echo "========================================================"
+                    echo "  ACTION REQUIRED — Open inbound port $APP_PORT in your"
+                    echo "  cloud provider security group / firewall:"
+                    echo ""
+                    echo "  AWS EC2 (Security Group):"
+                    echo "    Inbound rule: TCP $APP_PORT  Source: 0.0.0.0/0"
+                    echo ""
+                    echo "  Azure VM (NSG):"
+                    echo "    az network nsg rule create \\"
+                    echo "      --resource-group <RG> --nsg-name <NSG> \\"
+                    echo "      --name Allow-$APP_PORT --priority 1001 \\"
+                    echo "      --protocol Tcp --destination-port-ranges $APP_PORT \\"
+                    echo "      --access Allow --direction Inbound"
+                    echo ""
+                    echo "  GCP (Firewall Rule):"
+                    echo "    gcloud compute firewall-rules create allow-$APP_PORT \\"
+                    echo "      --allow tcp:$APP_PORT --source-ranges 0.0.0.0/0"
+                    echo ""
+                    echo "  Public URL: http://$PUBLIC_IP:$APP_PORT"
+                    echo "========================================================"
                 '''
             }
         }
@@ -190,9 +248,6 @@ pipeline {
                         echo "  Health URL   : http://$PUBLIC_IP:$APP_PORT/health"
                         echo "  Log file     : $(pwd)/flask-app.log"
                         echo "  Stop app     : kill $APP_PID"
-                        echo "--------------------------------------------------------"
-                        echo "  NOTE: Ensure your cloud security group / NSG allows"
-                        echo "  inbound TCP traffic on port $APP_PORT from 0.0.0.0/0"
                         echo "========================================================"
                     else
                         echo "ERROR: Flask application is not running. Check flask-app.log."
