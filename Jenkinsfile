@@ -84,13 +84,24 @@ pipeline {
 
         stage('Run Application') {
             steps {
-                echo 'Starting Flask application for smoke testing...'
+                echo 'Starting Flask application with Gunicorn (production)...'
 
                 sh '''
-                    nohup "$VENV_DIR/bin/python" app.py > flask-app.log 2>&1 &
-                    echo $! > flask-app.pid
+                    WORKERS=$(( 2 * $(nproc) + 1 ))
 
-                    echo "Flask application started with PID $(cat flask-app.pid)"
+                    nohup "$VENV_DIR/bin/gunicorn" \
+                        --workers "$WORKERS" \
+                        --bind 0.0.0.0:"$APP_PORT" \
+                        --timeout 120 \
+                        --access-logfile flask-app.log \
+                        --error-logfile flask-app.log \
+                        --log-level info \
+                        --pid flask-app.pid \
+                        app:app > gunicorn-boot.log 2>&1 &
+
+                    sleep 3
+                    echo "Gunicorn started with $WORKERS workers on port $APP_PORT"
+                    echo "PID file: $(cat flask-app.pid 2>/dev/null || echo \'not yet written\')"
                 '''
             }
         }
@@ -211,7 +222,7 @@ pipeline {
                 fi
             '''
 
-            archiveArtifacts artifacts: 'flask-app.log, public-ip.txt',
+            archiveArtifacts artifacts: 'flask-app.log, gunicorn-boot.log, public-ip.txt',
                              allowEmptyArchive: true
         }
 
